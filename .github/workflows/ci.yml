@@ -6,7 +6,7 @@ on:
       - "main"
 
 env:
-  REGISTRY_IMAGE: user/app
+  REGISTRY_IMAGE: tomeichlersmith/ldmx-multi-arch-test
 
 jobs:
   build:
