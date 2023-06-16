@@ -107,7 +107,7 @@ jobs:
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE }}:${{ steps.meta.outputs.version }}
           
- test:
+  test:
     needs: merge
     runs-on: ubuntu-latest
     strategy:
