@@ -153,4 +153,5 @@ jobs:
         echo ${DOCKER_METADATA_OUTPUT_VERSION}
         echo ${DOCKER_METADATA_OUTPUT_TAGS}
         echo ${DOCKER_METADATA_OUTPUT_LABELS}
-        jq . "${DOCKER_METADATA_OUTPUT_JSON}"
+        jq . <<<"${DOCKER_METADATA_OUTPUT_JSON}"
+        docker run $(jq .tags[0] <<<"${DOCKER_METADATA_OUTPUT_JSON}") test -f /etc/this-file-exists
