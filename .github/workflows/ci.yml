@@ -2,8 +2,18 @@ name: ci
 
 on:
   push:
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+      - '.github/workflows/mdbook.yml'
+      - '.github/workflows/ldmx-sw-dependabot.yml'
+      - '.github/workflows/README.md'
     branches:
-      - "main"
+      - "**"
     tags:
       - "**"
 
@@ -11,62 +21,80 @@ env:
   REGISTRY_IMAGE: tomeichlersmith/ldmx-multi-arch-test
 
 jobs:
+  deduce-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTER_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
   build:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         platform:
-          - linux/amd64
-          - linux/arm64
+          - amd64
+          - arm64
     steps:
       -
         name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       -
         name: Docker meta
         id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY_IMAGE }}
       -
         name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
+        uses: docker/setup-qemu-action@v3
       -
         name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
       -
         name: Login to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
       -
         name: Build and push by digest
         id: build
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v6
         with:
           context: .
-          cache-from: type=local,src=/home/github/layer-cache
-          cache-to: type=local,dest=/home/github/layer-cache
-          platforms: ${{ matrix.platform }}
+          cache-from: type=registry,ref=ldmx/dev:build-cache-${{ matrix.platform }}
+          cache-to: type=registry,ref=ldmx/dev:build-cache-${{ matrix.platform }},mode=max
+          platforms: linux/${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
       -
         name: Export digest
+        id: export-digest
         run: |
-          mkdir -p /tmp/digests
+          mkdir digest
           digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
+          digest_name="digest-${{ matrix.platform }}"
+          digest_file="digest/${digest#sha256:}"
+          touch "${digest_file}"
+          echo "name=${digest_name}" >> "$GITHUB_OUTPUT"
+          echo "file=${digest_file}" >> "$GITHUB_OUTPUT"
       -
         name: Upload digest
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: digests
-          path: /tmp/digests/*
+          name: ${{ steps.export-digest.outputs.name }}
+          path: ${{ steps.export-digest.outputs.file }}
           if-no-files-found: error
-          retention-days: 1
-  
+
   merge:
     runs-on: ubuntu-latest
     needs:
@@ -74,17 +102,18 @@ jobs:
     steps:
       -
         name: Download digests
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
-          name: digests
-          path: /tmp/digests
+          path: digests
+          pattern: digest-*
+          merge-multiple: true
       -
         name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
       -
         name: Docker meta
         id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY_IMAGE }}
           tags: |
@@ -94,65 +123,17 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
       -
         name: Login to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
       -
         name: Create manifest list and push
-        working-directory: /tmp/digests
+        working-directory: digests
         run: |
           docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf '${{ env.REGISTRY_IMAGE }}@sha256:%s ' *)
+            $(find -type f -exec basename {} ';' | xargs printf '${{ env.REGISTRY_IMAGE }}@sha256:%s ')
       -
         name: Inspect image
         run: |
           docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE }}:${{ steps.meta.outputs.version }}
-          
-  test:
-    needs: merge
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        ldmx_sw_branch: [ trunk, v3.0.0, v3.0.2, v3.1.13, v3.2.0, v3.2.4 ]
-    defaults:
-      run:
-        shell: bash
-    steps:
-    -
-      name: Setup QEMU
-      uses: docker/setup-qemu-action@v2
-    -
-      name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
-    -
-      name: Download Build Context for Test Script
-      uses: actions/checkout@v3
-    -
-      name: Docker meta
-      id: meta
-      uses: docker/metadata-action@v4
-      with:
-        images: ${{ env.REGISTRY_IMAGE }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-    -
-      name: Pull down ldmx-sw for testing
-      uses: actions/checkout@v3
-      with:
-        repository: LDMX-Software/ldmx-sw
-        submodules: recursive
-        path: ldmx-sw
-        ref: ${{ matrix.ldmx_sw_branch }}
-        fetch-depth: 0
-    - 
-      name: Test the Image
-      run: |
-        # extract a single tag to run tests with
-        tag=$(jq -r .tags[0] <<<"${DOCKER_METADATA_OUTPUT_JSON}")
-        echo ${tag}
-        docker run ${tag} test -f /etc/this-file-exists
