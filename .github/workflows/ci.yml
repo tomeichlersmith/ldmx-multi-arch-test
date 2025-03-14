@@ -34,6 +34,9 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=sha
+            #flavor: |
+            #latest=${{ github.event == 'push tag' && ! contains(github.ref, 'rc') }}
 
   build:
     runs-on: ubuntu-latest
